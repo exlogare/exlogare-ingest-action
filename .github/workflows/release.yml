@@ -1,0 +1,53 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Marketplace picks up new releases automatically as soon as the tag
+# is created with a release. We additionally roll the major-version
+# tag (vN -> latest vN.x.y) so users who pinned ``@v1`` keep getting
+# patch updates without manual upgrades.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate action.yml
+        run: |
+          test -f action.yml
+          # Sanity: action must declare composite + the install step.
+          grep -q "using: 'composite'" action.yml
+          grep -q 'install.sh' action.yml
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF##*/}"
+          notes="$(git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 HEAD^)..HEAD" || echo 'Initial release')"
+          gh release create "$tag" \
+            --title "$tag" \
+            --notes "$notes"
+
+      - name: Update rolling major tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF##*/}"
+          # tag = v1.2.3 -> major = v1
+          major="${tag%%.*}"
+          if [[ ! "$major" =~ ^v[0-9]+$ ]]; then
+            echo "skip rolling tag: ${tag} is not semver"
+            exit 0
+          fi
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git tag -f "$major" "$tag"
+          git push --force origin "$major"

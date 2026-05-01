@@ -1,0 +1,72 @@
+name: 'Exlogare Ingest'
+description: 'Send failing CI logs to Exlogare for AI-powered root cause analysis'
+author: 'Exlogare'
+
+# Marketplace metadata - the icon/color combo is what shows up next to
+# the action name on github.com/marketplace.
+branding:
+  icon: 'zap'
+  color: 'orange'
+
+inputs:
+  token:
+    description: |
+      Exlogare API token (use a repo or org secret, e.g. EXLOGARE_TOKEN).
+      Issue one at https://app.exlogare.net/dashboard/settings -> API tokens.
+    required: true
+  log_path:
+    description: |
+      Path to a log file to send. Use "-" to read stdin. Leave empty to
+      let `exl ingest` auto-detect (e.g. capture the previous failed
+      step output via $GITHUB_STEP_SUMMARY).
+    required: false
+    default: ''
+  endpoint:
+    description: 'Exlogare API base URL.'
+    required: false
+    default: 'https://api.exlogare.net'
+  fail_on_error:
+    description: |
+      If "true", the step fails when ingest fails (network error,
+      4xx/5xx). Default is "false" so a transient outage does not
+      mask the original CI failure you are trying to diagnose.
+    required: false
+    default: 'false'
+  cli_version:
+    description: |
+      `exl` CLI version to install. "latest" (default) tracks the
+      newest release in exlogare/exlogare-cli. Pin to a tag for
+      deterministic builds.
+    required: false
+    default: 'latest'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install exl CLI
+      shell: bash
+      run: |
+        curl -sSL https://exlogare.net/install.sh | bash -s -- "${{ inputs.cli_version }}"
+
+    - name: Send failure to Exlogare
+      shell: bash
+      env:
+        EXLOGARE_TOKEN: ${{ inputs.token }}
+        EXLOGARE_ENDPOINT: ${{ inputs.endpoint }}
+        EXLOGARE_FAIL_ON_ERROR: ${{ inputs.fail_on_error }}
+        LOG_PATH: ${{ inputs.log_path }}
+      run: |
+        set -uo pipefail
+        args=(--endpoint="$EXLOGARE_ENDPOINT")
+        if [[ -n "$LOG_PATH" ]]; then
+          args+=(--from="$LOG_PATH")
+        fi
+        if exl ingest "${args[@]}"; then
+          echo "exlogare: ingest succeeded"
+        else
+          rc=$?
+          echo "exlogare: ingest failed (rc=$rc)"
+          if [[ "${EXLOGARE_FAIL_ON_ERROR}" == "true" ]]; then
+            exit "$rc"
+          fi
+        fi
